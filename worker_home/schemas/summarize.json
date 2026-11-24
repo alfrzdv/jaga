@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "ringkasan": {"type": "string", "description": "1-3 kalimat isi item"},
+    "draft": {"type": ["string", "null"]},
+    "aksi_diajukan": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {"type": "object"}
+    }
+  },
+  "required": ["ringkasan", "draft", "aksi_diajukan"],
+  "additionalProperties": false
+}
