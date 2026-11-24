@@ -1,6 +1,6 @@
 # CLAUDE.md — Jaga (agent otomatis personal)
 
-> Nama "Jaga" cuma working name. Versi plan: v2, 2026-11-24. Sudah diaudit dan asumsi teknisnya diverifikasi per tanggal ini.
+> Nama "Jaga" cuma working name. Versi plan: v2.1, 2026-11-24. v2 sudah diaudit; v2.1 memasukkan hasil verifikasi Fase 0 dan keputusan selama Fase 1 (ringkasannya di §0).
 
 ## Aturan respons (khusus sesi development)
 - Setiap respons diawali dengan "ok ris."
@@ -9,6 +9,64 @@
 - Untuk tiap modul baru, **bikin skeleton + TODO dulu**. Implementasi penuh baru dikerjain setelah skeleton di-approve.
 - Jangan nebak flag CLI, versi library, atau perilaku API. Cek dulu (`--help`, dokumentasi, atau tes kecil), terus tulis temuannya di `docs/findings.md`.
 - File ini **hanya untuk sesi development**. Worker runtime **tidak boleh** membaca file ini (lihat §5).
+
+---
+
+## 0. Status sekarang (handoff, 2026-11-24)
+
+> Baca bagian ini dan `docs/findings.md` dulu sebelum lanjut. Findings berisi perilaku CLI/API yang sudah dites langsung, dan beberapa di antaranya menyimpang dari asumsi awal plan.
+
+### Posisi
+- **Fase 0 selesai.** Semua item terverifikasi; hasilnya sudah dimasukkan ke §4.3, §5.1, dan §5.2.
+- **Fase 1 sekitar 70%.** Semua modul Gateway sudah diimplementasi dan dites, kecuali `main.py`. Watcher n8n dan autostart belum ada.
+- Fase 2-4 belum disentuh. `executor.py` sengaja belum dibuat (baru dipakai di Fase 2).
+
+### Modul Gateway
+| Modul | Status | Catatan |
+|---|---|---|
+| `config.py` | selesai | error menyebut nama key, tidak pernah nilainya; `JAGA_HOME` di folder sync ditolak |
+| `store.py` | selesai | schema v1, tabel `TRANSITIONS`, `transaction()`, `release()`, item/digest, retensi |
+| `worker.py` | selesai | prompt via stdin, auth error tidak membakar percobaan, digest batch |
+| `api.py` | selesai | cek Host + `X-Gateway-Token`; Fase 1 cuma menerima `kind=item` |
+| `context.py` | selesai | riwayat chat + item relevan (kata kunci lowongan/magang/loker) |
+| `notifier.py` | selesai | `Notifier` (antrean, jam tenang, 429) + `DigestScheduler` (slot + heartbeat pagi) |
+| `bot.py` | selesai | owner lock group -1 (dites lewat dispatcher PTB asli), `/status`, `/jobs`, chat, tombol Lihat |
+| `main.py` | **skeleton** | langkah berikutnya |
+
+136 tes, semua hijau. Jalankan dengan `uv run pytest` dan `uv run ruff check .`.
+
+### Keputusan yang mengubah plan v2
+- **Isolasi Worker**: `--setting-sources user` terbukti masih memuat `~/.claude/CLAUDE.md`. Diganti `CLAUDE_CONFIG_DIR` terpisah + `CLAUDE_CODE_OAUTH_TOKEN` + `--setting-sources "" --safe-mode` (§5.1, §5.2).
+- **Prompt Worker lewat stdin**, bukan argv, karena batas command line Windows sekitar 32k karakter.
+- **Item D diringkas batch saat digest**, tidak satu per satu (§4.1, §4.4, §7). Kind baru: `item` dan `digest`.
+- **Sumber D pertama: RSS lowongan, bukan LinkedIn.** LinkedIn tidak punya RSS dan User Agreement-nya melarang scraping. Opsi LinkedIn berikutnya: Job Alert email → Gmail (Fase 2). Feed RSS-nya **belum dipilih**.
+- **Python dari uv** (`3.14.10`, SQLite 3.53.1). CPython resmi 3.14.0 di mesin owner masih membawa SQLite 3.50.4.
+- **Error API keluar sebagai `subtype: "success"` + `is_error: true`.** Jangan cuma mengecek `subtype`.
+
+### Blocker
+- **Telegram 429 terus-menerus.** Semua request ke bot (termasuk `getMe`) ditahan sekitar 34 detik lalu dibalas `Too Many Requests: retry after 32`, bahkan setelah token di-revoke. Koneksi ke `api.telegram.org` normal, dan token dummy dibalas 404 dengan cepat. Dugaan: flood limit menempel di ID bot. Langkah berikutnya: bikin bot baru lewat `/newbot`. Kalau bot baru juga kena 429, coba jaringan lain (berarti limitnya per IP). Selama blocker ini ada, tes end-to-end Telegram belum bisa jalan. Unit test tidak terpengaruh karena pakai bot palsu.
+
+### Langkah berikutnya (urut)
+1. `main.py`: satu event loop untuk PTB (urutan start/stop sesuai findings), uvicorn `127.0.0.1`, `WorkerLoop`, `Notifier`, `DigestScheduler`, retensi harian. Set `PTB_TIMEDELTA=1`. Logging ke file `encoding="utf-8"` di `JAGA_HOME/logs` (console Windows cp1252 crash di karakter seperti `✓`). Panggil `install_worker_home()` dan `recover_on_start()` saat start.
+2. Watcher n8n untuk RSS lowongan. Cari 2-3 kandidat feed, **verifikasi feed-nya hidup**, lalu biar owner yang pilih. URL feed dijadikan variabel. Export workflow ke `n8n/workflows/`. Cek dulu klaim "If Execution Is Missed" di §9 Fase 1 terhadap n8n 2.48.8 (belum diverifikasi).
+3. Autostart Windows (Task Scheduler) untuk Gateway dan n8n, plus catatan di `docs/findings.md`.
+4. Jalankan checklist "Selesai kalau" Fase 1 secara manual.
+
+### Setup di mesin baru
+1. `uv python install 3.14.10` lalu `uv sync`.
+2. `npm install -g n8n@2.48.8` (Node 24.x).
+3. `cp .env.example .env`, lalu isi:
+   - `TELEGRAM_BOT_TOKEN`: bot sendiri dari @BotFather
+   - `OWNER_CHAT_ID`: chat id akun Telegram yang jadi owner
+   - `GATEWAY_TOKEN`: acak, minimal 32 karakter
+   - `CLAUDE_CODE_OAUTH_TOKEN`: hasil `claude setup-token` (interaktif, butuh browser)
+   
+   Token tidak pernah di-commit, dan tiap orang pakai token miliknya sendiri.
+4. `JAGA_HOME` default `~/.jaga/`. Folder `worker/` dan `claude-config/` dibuat otomatis oleh `install_worker_home()`. Pastikan tidak ada `CLAUDE.md` di `~/.jaga` atau folder di atasnya.
+
+### Sisa di mesin owner (tidak ikut repo)
+- Workflow tes `jaga-probe-localhost` (id `jagaProbe0001`, nonaktif) masih ada di DB n8n lokal. Hapus lewat UI.
+- `~/.n8n/config` berisi encryption key n8n. Jangan sampai hilang setelah credential Google dimasukkan.
 
 ---
 
@@ -290,18 +348,18 @@ Setiap fase: skeleton + TODO → review → implementasi → checklist manual �
 - [x] Install n8n 2.x (pin versi: 2.48.8), set `N8N_LISTEN_ADDRESS=127.0.0.1`, pastikan HTTP Request ke `127.0.0.1` jalan (SSRF protection default off; kalau dinyalakan, tambahkan `N8N_SSRF_ALLOWED_IP_RANGES=127.0.0.1/32`)
 
 ### Fase 1 — Pondasi
-Scope: Gateway (store, api, bot, notifier, worker) + satu watcher **D** (satu sumber web/RSS) + Worker `summarize` + `chat`. **Belum ada aksi.** Plus autostart + `/status` + `/jobs`.
-- Schedule Trigger n8n: set **"If Execution Is Missed" = jalankan sekali**. Defaultnya, run yang terlewat saat laptop sleep di-skip; cursor yang menutup celahnya.
-- PTB 22.x: jalankan manual (`initialize()` → `start()` → `updater.start_polling()`) bareng uvicorn di event loop yang sama. **Jangan** pakai `run_polling()` karena dia memblok loop.
+Scope: Gateway (store, api, bot, notifier, worker) + satu watcher **D** (satu sumber RSS) + Worker `digest` + `chat`. **Belum ada aksi.** Plus autostart + `/status` + `/jobs`.
+- Schedule Trigger n8n: set **"If Execution Is Missed" = jalankan sekali**. Defaultnya, run yang terlewat saat laptop sleep di-skip; cursor yang menutup celahnya. *(Belum diverifikasi di n8n 2.48.8.)*
+- PTB 22.x: jalankan manual bareng uvicorn di event loop yang sama. Urutan sesuai `run_polling` di source PTB 22.8: `initialize()` → `updater.start_polling()` → `start()`, berhenti dengan `updater.stop()` → `stop()` → `shutdown()`. **Jangan** pakai `run_polling()` karena dia memblok loop.
 
-Selesai kalau:
-- [ ] Item baru → notif ringkasan / masuk digest
-- [ ] Item sama dikirim 2x → notif cuma sekali
-- [ ] Chat **dan tombol** dari akun lain diabaikan
-- [ ] Gateway di-kill di tengah job → setelah restart job lanjut
+Selesai kalau (✓ unit = sudah dites di pytest, end-to-end belum):
+- [ ] Item baru → notif ringkasan / masuk digest (✓ unit)
+- [ ] Item sama dikirim 2x → notif cuma sekali (✓ unit)
+- [ ] Chat **dan tombol** dari akun lain diabaikan (✓ unit, lewat dispatcher PTB asli)
+- [ ] Gateway di-kill di tengah job → setelah restart job lanjut (✓ unit: `recover_on_start`)
 - [ ] Laptop reboot → Gateway + n8n nyala sendiri
-- [ ] Chat "cek lowongan dong" dijawab berdasarkan data di SQLite
-- [ ] `/status` menampilkan antrean, error terakhir, pemakaian Worker hari ini
+- [ ] Chat "cek lowongan dong" dijawab berdasarkan data di SQLite (✓ unit)
+- [ ] `/status` menampilkan antrean, error terakhir, pemakaian Worker hari ini (✓ unit)
 
 ### Fase 2 — Approval (Gmail pribadi)
 Ringkas inbox + draft balasan + tombol `[Kirim] [Edit] [Tolak]`.

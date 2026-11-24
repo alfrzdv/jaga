@@ -165,6 +165,14 @@ Keputusan: `worker.py` mendeteksi auth error (401 / "Not logged in" / "authentic
 
 Catatan: console Windows (cp1252) gagal `print` karakter seperti `✓`. Logging Gateway harus ke file dengan `encoding="utf-8"`, jangan andalkan stdout/stderr console (apalagi di bawah Task Scheduler).
 
+## Fase 1 — Telegram (2026-11-24, belum beres)
+
+- Token pertama: bagian setelah `:` cuma 34 karakter (seharusnya 35), dan `getMe` dibalas `Unauthorized`. Token kedua: 40 karakter, dibalas `404 Not Found`. Pola token yang valid: `^\d+:[A-Za-z0-9_-]{35}$`. `config.py` belum memvalidasi pola ini.
+- Token yang polanya valid (dan juga setelah di-revoke): semua request, termasuk `getMe`, ditahan sekitar 34 detik lalu dibalas `429 Too Many Requests: retry after 32`. Kadang malah timeout. Polanya konsisten selama lebih dari 15 menit walaupun `retry_after` sudah diikuti.
+- Pembanding: `curl https://api.telegram.org/` balik kurang dari 1 detik lewat IPv4 (DNS cuma memberi IPv4 `149.154.166.110`; IPv6 tidak tersedia). Token dummy dibalas 404 dengan cepat. Cloudflare WARP mati. Di laptop tidak ada proses lain yang polling bot (satu-satunya koneksi ke 149.154.x adalah Chrome).
+- Dugaan: flood limit menempel di ID bot (revoke tidak mengganti ID). Belum dibuktikan. Tes berikutnya: bot baru lewat `/newbot`; kalau tetap 429, coba jaringan lain.
+- `RetryAfter.retry_after` di PTB 22.8 bisa `int` atau `timedelta` (deprecation v22.2). Gateway set `PTB_TIMEDELTA=1` dan menangani dua-duanya.
+
 ### PTB 22.8: urutan start/stop manual
 
 Dibaca dari source `telegram/ext/_application.py` (`__run`, dipakai `run_polling`):
