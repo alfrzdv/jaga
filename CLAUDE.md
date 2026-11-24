@@ -81,6 +81,7 @@ jaga/                        # repo (berisi CLAUDE.md dev ini)
 │   ├── worker.py            # wrapper claude -p + validasi output
 │   ├── executor.py          # eksekusi aksi yang di-approve (delegasi ke n8n / lokal)
 │   └── context.py           # ambil data relevan dari SQLite untuk prompt chat
+├── pyproject.toml           # dikelola uv, Python 3.14.10 (.python-version)
 ├── worker_home/             # TEMPLATE: di-copy ke JAGA_HOME saat setup
 │   ├── system_prompt.md
 │   └── schemas/*.json       # JSON schema output per tipe job
@@ -94,6 +95,7 @@ Data runtime **di luar repo**, di `JAGA_HOME` (default `~/.jaga/`):
 ```
 ~/.jaga/
 ├── jaga.db                  # SQLite
+├── claude-config/           # CLAUDE_CONFIG_DIR untuk Worker (§5.1), terpisah dari ~/.claude
 ├── worker/                  # cwd Worker, TIDAK ADA CLAUDE.md di sini atau di atasnya
 │   ├── system_prompt.md
 │   └── schemas/
@@ -134,7 +136,7 @@ Data runtime **di luar repo**, di `JAGA_HOME` (default `~/.jaga/`):
 ### 4.3 Mode SQLite
 - `PRAGMA journal_mode=WAL` dan `busy_timeout`. Satu writer, banyak reader.
 - File DB wajib di filesystem lokal, **bukan** folder sync.
-- Cek `sqlite3.sqlite_version` saat start. Kalau di bawah 3.51.3, log warning (ada bug langka korupsi saat WAL reset).
+- Cek `sqlite3.sqlite_version` saat start. Kalau di bawah 3.51.3, log warning (ada bug langka korupsi saat WAL reset). Di Windows, pakai Python dari `uv` (`uv python install 3.14.10`, SQLite 3.53.1); CPython resmi 3.14.0 dan build MSYS2 tidak dipakai.
 
 ### 4.4 Status job
 ```
@@ -181,37 +183,43 @@ Divalidasi lewat `--json-schema` (§5.2). Hasilnya ada di field `structured_outp
 ## 5. Worker: isolasi & pemanggilan
 
 ### 5.1 Isolasi dari setup dev
-`claude -p` biasa membaca CLAUDE.md di cwd + semua parent + `~/.claude/CLAUDE.md`, menjalankan hooks project, dan memuat `.mcp.json` tanpa trust prompt. `--bare` memberi isolasi penuh **tapi mengabaikan login langganan** (cuma terima API key), jadi tidak dipakai. Pakai kombinasi ini:
+`claude -p` biasa membaca CLAUDE.md di cwd + semua parent + `~/.claude/CLAUDE.md`, menjalankan hooks project, dan memuat `.mcp.json` tanpa trust prompt. `--bare` memberi isolasi penuh **tapi mengabaikan login langganan** (cuma terima API key), jadi tidak dipakai. Pakai kombinasi ini (semua sudah dites di Fase 0, lihat `docs/findings.md`):
 - cwd = `~/.jaga/worker/` (tidak ada CLAUDE.md di situ atau di atasnya)
-- `--setting-sources` **tanpa** `project` dan `local`
+- **`CLAUDE_CONFIG_DIR=~/.jaga/claude-config`** + **`CLAUDE_CODE_OAUTH_TOKEN`** dari `claude setup-token` (disimpan di `.env`). Wajib, bukan opsional: tanpa ini harness menyuntik email akun ke konteks Worker, dan Worker tetap bisa lihat isi `~/.claude`.
+- `--setting-sources ""` + `--safe-mode` sebagai lapisan kedua. **Jangan** `--setting-sources user`: terbukti masih memuat `~/.claude/CLAUDE.md`.
 - env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
-- `--strict-mcp-config` (dengan `--mcp-config` kosong atau minimal)
-- instruksi lewat `--append-system-prompt-file ~/.jaga/worker/system_prompt.md`
+- `--strict-mcp-config` (tanpa `--mcp-config`)
+- instruksi lewat `--append-system-prompt-file ~/.jaga/worker/system_prompt.md` (flag ini jalan walaupun tidak tercantum di `--help`)
 - **unset `ANTHROPIC_API_KEY`** di env subprocess. Kalau ada, `-p` selalu memakainya dan tagihannya ikut tarif API.
-- Opsional: `CLAUDE_CONFIG_DIR` terpisah + `CLAUDE_CODE_OAUTH_TOKEN` dari `claude setup-token`
 
-### 5.2 Template pemanggilan (verifikasi dulu di mesin lokal)
+### 5.2 Template pemanggilan (terverifikasi di Claude Code 2.1.323, Windows)
 ```bash
+# cwd = ~/.jaga/worker, stdin = /dev/null
+# env: ANTHROPIC_API_KEY di-unset, CLAUDE_CODE_DISABLE_AUTO_MEMORY=1,
+#      CLAUDE_CONFIG_DIR=~/.jaga/claude-config, CLAUDE_CODE_OAUTH_TOKEN=<.env>
 claude -p "<prompt>" \
   --output-format json \
   --json-schema "$(cat schemas/<kind>.json)" \
   --model haiku \
   --permission-mode dontAsk \
   --permission-prompts none \
-  --allowedTools "<whitelist per kind>" \
+  --tools "<whitelist per kind, \"\" kalau tanpa tools>" \
   --max-turns <N> \
   --max-budget-usd <X> \
   --no-session-persistence \
-  --setting-sources user \
+  --setting-sources "" \
+  --safe-mode \
   --strict-mcp-config \
   --append-system-prompt-file system_prompt.md
 ```
 - `--model`: `haiku` untuk summarize/chat, `sonnet` untuk draft/file task.
+- `--tools` membatasi tool yang **tersedia**; `--allowedTools` cuma meng-approve. Pakai `--tools`. Structured output tetap jalan dengan `--tools ""`.
 - `--max-budget-usd`: cuma backstop.
-- `--setting-sources user`: cek di Fase 0 apakah `~/.claude/CLAUDE.md` masih kebaca.
+- `--max-turns` tidak menghitung turn structured output (`--max-turns 1` tanpa tools tetap sukses dengan `num_turns: 2`).
 - Tidak ada flag `--cwd`: set cwd lewat `subprocess`.
-- Tidak ada flag timeout total: pakai timeout di Python, lalu kirim **SIGINT** (SIGTERM menghasilkan exit 143 tanpa result).
-- Setelah selesai, cek `is_error`, `subtype` (`success`, `error_max_turns`, `error_max_budget_usd`, ...), `permission_denials`, dan `structured_output`.
+- **stdin wajib `DEVNULL`**. Kalau tidak, CLI menunggu stdin 3 detik di setiap panggilan.
+- Tidak ada flag timeout total: pakai timeout di Python. **Di Windows tidak ada SIGINT**; `CTRL_BREAK_EVENT` (exit 0) maupun `terminate()` (exit 1) sama-sama menghasilkan stdout kosong. Jadi timeout = gagal tanpa data usage, dan exit code bukan tanda sukses. Di POSIX: SIGINT (SIGTERM menghasilkan exit 143 tanpa result).
+- Setelah selesai, cek `is_error`, `subtype` (`success`, `error_max_turns`, `error_max_budget_usd`, ...), `permission_denials`, dan `structured_output`. `error_max_turns` keluar dengan exit 1 dan tanpa `result`/`structured_output`. `permission_denials` bisa terisi walaupun `subtype: success`.
 - Sintaks rule tools pakai spasi sebelum `*`, misalnya `Bash(ls *)`.
 - Pin Claude Code **≥ 2.1.302**. Di versi lebih lama, `-p` belum default ke Manual mode dan `--setting-sources` masih bocor.
 
@@ -270,10 +278,10 @@ Jangan pakai `--resume`: sesi yang di-resume tetap memakai system prompt pertama
 Setiap fase: skeleton + TODO → review → implementasi → checklist manual → **checkpoint**.
 
 ### Fase 0 — Verifikasi mesin (½ hari)
-- [ ] Catat OS, versi Python (target **3.11+**), Node (**24.x**, sesuai `engines` n8n 2.x), Claude Code (**≥ 2.1.302**), SQLite
-- [ ] Jalankan satu `claude -p` dengan template §5.2 dari `~/.jaga/worker/`, simpan contoh JSON output asli ke `docs/findings.md` (cek nama key)
-- [ ] Buktikan Worker **tidak** membaca CLAUDE.md dev (minta dia menyebut instruksi apa yang dia lihat)
-- [ ] Tentukan apakah `--setting-sources user` memuat `~/.claude/CLAUDE.md`. Kalau iya, cari cara exclude yang tetap mempertahankan auth
+- [x] Catat OS, versi Python (target **3.11+**), Node (**24.x**, sesuai `engines` n8n 2.x), Claude Code (**≥ 2.1.302**), SQLite
+- [x] Jalankan satu `claude -p` dengan template §5.2 dari `~/.jaga/worker/`, simpan contoh JSON output asli ke `docs/findings.md` (cek nama key)
+- [x] Buktikan Worker **tidak** membaca CLAUDE.md dev (minta dia menyebut instruksi apa yang dia lihat)
+- [x] Tentukan apakah `--setting-sources user` memuat `~/.claude/CLAUDE.md`. Kalau iya, cari cara exclude yang tetap mempertahankan auth → iya, memuat. Solusi di §5.1
 - [ ] Install n8n 2.x (pin versi), set `N8N_LISTEN_ADDRESS=127.0.0.1`, pastikan HTTP Request ke `127.0.0.1` jalan (SSRF protection default off; kalau dinyalakan, tambahkan `N8N_SSRF_ALLOWED_IP_RANGES=127.0.0.1/32`)
 
 ### Fase 1 — Pondasi

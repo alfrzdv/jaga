@@ -1,0 +1,27 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "duration_ms": 2484,
+  "duration_api_ms": 2281,
+  "total_cost_usd": 0.0009651000000000001,
+  "stop_reason": "tool_use",
+  "terminal_reason": "completed",
+  "api_error_status": null,
+  "permission_denials": [],
+  "result": "{\"ringkasan\": \"contoh ringkasan\", \"draft\": null, \"aksi_diajukan\": []}",
+  "structured_output": {
+    "ringkasan": "contoh ringkasan",
+    "draft": null,
+    "aksi_diajukan": []
+  },
+  "modelUsage": {
+    "claude-haiku-5-5": {
+      "inputTokens": 2,
+      "outputTokens": 317,
+      "costUSD": 0.0009651000000000001
+    }
+  },
+  "session_id": "00000000-0000-0000-0000-000000000000"
+}

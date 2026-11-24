@@ -9,15 +9,19 @@ Hasil verifikasi selama development. Tiap entri: tanggal, apa yang dites, hasiln
 | Komponen | Versi | Target | Status |
 |---|---|---|---|
 | OS | Windows 11 Home 10.0.26300 | - | - |
-| Python (`C:\Python314\python.exe`, CPython resmi) | 3.14.x, SQLite **3.50.4** | 3.11+, SQLite ≥ 3.51.3 | Python ok, SQLite di bawah batas |
-| Python (`/c/msys64/mingw64/bin/python`, default di PATH Git Bash) | 3.14.6, SQLite 3.53.4 | - | build MINGW, jangan dipakai (lihat bawah) |
-| Python 3.11 (`AppData\Local\Programs\Python\Python311`) | 3.11, SQLite 3.45.1 | - | cadangan |
+| **Python via uv** (`uv python install 3.14.10`) | 3.14.10, SQLite **3.53.1** | 3.11+, SQLite ≥ 3.51.3 | **dipakai** |
+| Python (`C:\Python314\python.exe`, CPython resmi) | 3.14.0, SQLite 3.50.4 | - | SQLite di bawah batas |
+| Python (`/c/msys64/mingw64/bin/python`, default di PATH Git Bash) | 3.14.6, SQLite 3.53.4 | - | build MINGW, jangan dipakai |
+| Python 3.11 (`AppData\Local\Programs\Python\Python311`) | 3.11, SQLite 3.45.1 | - | nggak dipakai |
+| uv | 0.13.9 (di-update dari 0.10.11) | - | ok |
 | Node | 24.11.1 | 24.x | ok |
 | npm | 11.6.2 | - | ok |
 | Claude Code | 2.1.323 | ≥ 2.1.302 | ok |
 | n8n | belum terinstall | 2.x | npm `stable` = 2.48.8, `engines.node >= 24.0.0` |
 
-`python` di PATH Git Bash adalah build MSYS2/MINGW. Banyak paket dengan ekstensi C (pydantic-core, dll.) nggak punya wheel untuk MINGW, jadi venv Gateway sebaiknya dibuat dari `C:\Python314\python.exe`. Konsekuensinya SQLite 3.50.4 kena warning di §4.3.
+`python` di PATH Git Bash adalah build MSYS2/MINGW. Banyak paket dengan ekstensi C (pydantic-core, dll.) nggak punya wheel untuk MINGW, jadi nggak dipakai.
+
+`C:\Python314` masih 3.14.0 dengan SQLite 3.50.4. `sqlean.py` (drop-in sqlite3) juga mentok di 3.50.4.5, dan Python 3.14.3 dari uv 0.10.11 sama aja (3.50.4). Setelah `uv self update` ke 0.13.9, build `cpython-3.14.10-windows-x86_64-none` membawa SQLite 3.53.1. Python ini terinstall terpisah di `%APPDATA%\uv\python\`, jadi `C:\Python314` nggak disentuh. Project pakai `uv` (`.python-version` = 3.14.10).
 
 ### `claude -p`: flag
 
@@ -46,7 +50,9 @@ Kesimpulan:
 - Tanpa `project` di setting sources, CLAUDE.md di cwd/parent nggak dimuat. Ini konsisten di semua mode.
 - Dipakai: `--setting-sources "" --safe-mode`. Auth langganan tetap jalan (`ANTHROPIC_API_KEY` di-unset, run sukses).
 - `--bare` nggak dites karena dari help-nya jelas cuma terima `ANTHROPIC_API_KEY`/`apiKeyHelper`.
-- Yang masih bocor: harness tetap menyuntik email akun Claude ke konteks (system-reminder). Isinya bukan instruksi, jadi bukan masalah isolasi, tapi berarti Worker tahu email akun. Kalau mau dihilangkan, opsi `CLAUDE_CONFIG_DIR` terpisah + `claude setup-token` (§5.1 opsional) perlu dites.
+- Dengan `~/.claude` biasa, harness tetap menyuntik email akun Claude ke konteks (system-reminder). **Fix:** `CLAUDE_CONFIG_DIR` terpisah + auth lewat env `CLAUDE_CODE_OAUTH_TOKEN`. Dites dengan config dir kosong: auth jalan, Worker melaporkan nggak ada email, dan `.claude.json` baru yang dibikin CLI nggak berisi string email. Config dir ini juga memutus akses ke `~/.claude` (skills, settings, CLAUDE.md user) sepenuhnya, jadi `--setting-sources ""` dan `--safe-mode` tinggal jadi lapisan kedua.
+  - Tes pakai access token jangka pendek dari `~/.claude/.credentials.json`. Untuk produksi, owner jalankan `claude setup-token` sekali (interaktif, butuh browser) dan simpan hasilnya di `.env` sebagai `CLAUDE_CODE_OAUTH_TOKEN`.
+  - Kalau token nggak valid, run bakal gagal auth. Bentuk error-nya belum dites; `worker.py` harus menganggap `is_error: true` atau stdout kosong sebagai gagal dan kirim alert.
 - Built-in plugin (`cc-plugin-agents-md`, `cc-plugin-telemetry`, `cc-plugin-privacy`, `cc-plugin-plugin-authoring`) tetap load di semua mode. Itu bawaan binary.
 
 ### `claude -p`: output JSON
@@ -71,7 +77,10 @@ session_id, usage, modelUsage, api_error_status, credential_expires_at, ...
 - `credential_expires_at` ikut keluar. Bisa dipakai buat alert "token langganan mau habis".
 - `total_cost_usd` tetap terisi walau pakai langganan. Angka list price, bukan tagihan.
 - Model `haiku` resolve ke `claude-haiku-5-5`.
-- Satu panggilan tanpa tools + structured output = `num_turns: 2`. `--max-turns 1` **tetap sukses** dengan `num_turns: 2`, jadi turn structured output kayaknya nggak dihitung. Sampel `error_max_turns` asli belum didapat. Perlu kasus pakai tools (Fase 4) untuk memicunya.
+- Satu panggilan tanpa tools + structured output = `num_turns: 2`. `--max-turns 1` **tetap sukses** dengan `num_turns: 2`, jadi turn structured output kayaknya nggak dihitung.
+- `error_max_turns` asli didapat dengan `--tools Read --max-turns 1` + tugas baca dua file berurutan: **exit 1**, `subtype: "error_max_turns"`, `is_error: true`, `terminal_reason: "max_turns"`, `errors: ["Reached maximum number of turns (1)"]`, dan **nggak ada key `result` maupun `structured_output`**.
+- `permission_denials`: dengan `--permission-mode dontAsk --tools Read`, baca file di luar cwd (`../workspace/luar.txt`) ditolak. Hasilnya tetap `subtype: "success"`, exit 0, dan penolakannya tercatat sebagai `[{tool_name, tool_use_id, tool_input}]`. Artinya untuk `file_task` (Fase 4), cwd Worker harus `~/.jaga/workspace/` atau folder itu ditambahkan lewat `--add-dir`.
+- Sampel yang sudah disanitasi ada di `tests/samples/` (`success.json`, `error_max_turns.json`, `permission_denied.json`).
 
 ### Timeout di Windows
 
@@ -88,7 +97,10 @@ Windows nggak punya SIGINT untuk subprocess, dan dua-duanya nggak menghasilkan J
 
 ```bash
 cd ~/.jaga/worker
-env -u ANTHROPIC_API_KEY CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 \
+env -u ANTHROPIC_API_KEY \
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 \
+  CLAUDE_CONFIG_DIR=~/.jaga/claude-config \
+  CLAUDE_CODE_OAUTH_TOKEN=<dari .env> \
 claude -p "<prompt>" \
   --output-format json \
   --json-schema "<isi schemas/<kind>.json>" \
