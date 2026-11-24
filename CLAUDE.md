@@ -114,7 +114,7 @@ Data runtime **di luar repo**, di `JAGA_HOME` (default `~/.jaga/`):
 | id | INTEGER PK | |
 | source | TEXT | `gmail`, `lms`, `classroom`, `web:<nama>`, `chat` |
 | external_id | TEXT | ID item di sumber asal |
-| kind | TEXT | `summarize`, `draft_reply`, `file_task`, `chat` |
+| kind | TEXT | `item`, `digest`, `summarize`, `draft_reply`, `file_task`, `chat` (lihat §7 untuk `item`/`digest`) |
 | payload | TEXT (JSON) | isi item mentah (dihapus saat retensi, §7) |
 | status | TEXT | lihat 4.4 |
 | proposal | TEXT (JSON) | output Worker versi terakhir |
@@ -145,7 +145,9 @@ baru → diproses → nunggu_approve → disetujui → dieksekusi → selesai
               ↘ gagal (setelah 2x retry Worker)
 nunggu_approve → ditolak
 nunggu_approve → (edit) → nunggu_approve dengan version+1
+baru → selesai   (khusus kind=item, setelah digest yang memuatnya sukses)
 ```
+- `version` naik saat proposal **diganti** (sudah ada proposal sebelumnya). Proposal pertama tidak menaikkan version.
 - **Timeout tidak pernah berarti setuju.** Tidak ada transisi otomatis ke `disetujui`.
 - **`perlu_cek`**: eksekusi aksi irreversible error atau hasilnya tidak jelas (timeout, koneksi putus). **Tidak boleh di-retry otomatis**, karena email bisa saja sudah terkirim. Owner dapat notif dan cek manual, lalu pilih `[Tandai selesai] [Coba lagi]`.
 - Saat Gateway start, job `diproses` yang lebih tua dari N menit di-reset ke `baru`. Job `disetujui`/`dieksekusi` yang nyangkut dipindah ke `perlu_cek`, **bukan** di-reset.
@@ -252,6 +254,9 @@ Jangan pakai `--resume`: sesi yang di-resume tetap memakai system prompt pertama
 ## 7. Notifikasi, digest, retensi
 - **Antrean kirim** (`notifier.py`): maksimal ~1 pesan/detik ke chat owner. Telegram membalas 429 kalau kirim berturut-turut terlalu lama.
 - **Digest**: item D digabung jadi satu ringkasan per X jam. Item A (deadline) dan B (email penting) bisa langsung dikirim.
+  - Item D masuk sebagai `kind=item` dan **tidak** diproses Worker satu per satu. Saat jadwal digest, Gateway bikin satu job `kind=digest` (payload = daftar id item) dan Worker meringkas semuanya dalam satu panggilan.
+  - Maksimal satu digest yang belum selesai (`baru`/`diproses`) di satu waktu. Digest sukses → item-nya `baru → selesai`. Digest gagal → item tetap `baru` dan ikut digest berikutnya.
+  - Digest tanpa item tidak memanggil Worker.
 - **Jam tenang** (default 23.00–06.00): notif ditahan, kecuali `priority=urgent` (deadline < 24 jam, aksi `perlu_cek`).
 - **Heartbeat**: digest pagi selalu dikirim walaupun kosong ("aman, 0 item baru"). Kalau pagi ga ada pesan, berarti ada yang mati.
 - **Pesan > 4096 karakter**: dipotong, isi lengkapnya lewat tombol "Lihat".
