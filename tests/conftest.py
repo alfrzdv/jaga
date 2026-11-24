@@ -1,9 +1,13 @@
+import os
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from gateway.config import DEFAULT_LIMITS, Config
+
+# PTB 22.x: retry_after selalu timedelta (opt-in perilaku versi berikutnya), sama seperti main.py
+os.environ.setdefault("PTB_TIMEDELTA", "1")
 
 FAKE_CLAUDE = Path(__file__).parent / "fake_claude.py"
 
