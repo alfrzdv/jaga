@@ -120,6 +120,17 @@ claude -p "<prompt>" \
 
 Untuk `file_task`: ganti `--tools ""` dengan `--tools "Read,Glob,Grep"` (belum dites, Fase 4).
 
-### Belum dikerjakan di Fase 0
+### n8n
 
-- [ ] Install n8n 2.x, set `N8N_LISTEN_ADDRESS=127.0.0.1`, tes HTTP Request ke 127.0.0.1.
+- `npm install -g n8n@2.48.8` sukses (6 menit, 2311 paket, ada warning deprecated dari `@langchain/community`, nggak ngaruh). Binary di `%APPDATA%\npm\n8n`. Data di `~/.n8n/` (encryption key dibikin otomatis di `~/.n8n/config`, jangan sampai hilang: credential Google nanti dienkripsi pakai key ini).
+- `N8N_LISTEN_ADDRESS=127.0.0.1 n8n start`: `netstat` menunjukkan `127.0.0.1:5678` (editor/webhook) dan `127.0.0.1:5679` (task runner broker). Akses lewat IP LAN gagal. Health check: `GET /healthz` → 200.
+- HTTP Request node (typeVersion 4.2) ke `http://127.0.0.1:8799` dengan header custom: sukses, header sampai. SSRF protection default nggak ngeblok.
+- CLI: `n8n import:workflow --input=<file>` dan `n8n execute --id=<id> --rawOutput` jalan. `--file` di `execute` sudah deprecated. Nggak ada perintah CLI untuk hapus workflow; workflow tes `jaga-probe-localhost` (id `jagaProbe0001`, nonaktif) masih ada di DB n8n, hapus lewat UI.
+
+### PTB 22.8: urutan start/stop manual
+
+Dibaca dari source `telegram/ext/_application.py` (`__run`, dipakai `run_polling`):
+- start: `initialize()` → `updater.start_polling()` → `start()`
+- stop: `updater.stop()` → `stop()` → `shutdown()`
+
+Urutan di CLAUDE.md §9 (`initialize → start → start_polling`) juga jalan, tapi `main.py` ikut urutan PTB.

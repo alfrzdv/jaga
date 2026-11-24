@@ -282,7 +282,7 @@ Setiap fase: skeleton + TODO → review → implementasi → checklist manual �
 - [x] Jalankan satu `claude -p` dengan template §5.2 dari `~/.jaga/worker/`, simpan contoh JSON output asli ke `docs/findings.md` (cek nama key)
 - [x] Buktikan Worker **tidak** membaca CLAUDE.md dev (minta dia menyebut instruksi apa yang dia lihat)
 - [x] Tentukan apakah `--setting-sources user` memuat `~/.claude/CLAUDE.md`. Kalau iya, cari cara exclude yang tetap mempertahankan auth → iya, memuat. Solusi di §5.1
-- [ ] Install n8n 2.x (pin versi), set `N8N_LISTEN_ADDRESS=127.0.0.1`, pastikan HTTP Request ke `127.0.0.1` jalan (SSRF protection default off; kalau dinyalakan, tambahkan `N8N_SSRF_ALLOWED_IP_RANGES=127.0.0.1/32`)
+- [x] Install n8n 2.x (pin versi: 2.48.8), set `N8N_LISTEN_ADDRESS=127.0.0.1`, pastikan HTTP Request ke `127.0.0.1` jalan (SSRF protection default off; kalau dinyalakan, tambahkan `N8N_SSRF_ALLOWED_IP_RANGES=127.0.0.1/32`)
 
 ### Fase 1 — Pondasi
 Scope: Gateway (store, api, bot, notifier, worker) + satu watcher **D** (satu sumber web/RSS) + Worker `summarize` + `chat`. **Belum ada aksi.** Plus autostart + `/status` + `/jobs`.
