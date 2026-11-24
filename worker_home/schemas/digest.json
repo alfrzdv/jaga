@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "ringkasan": {"type": "string", "description": "digest untuk owner: satu poin per item, paling relevan duluan"},
+    "draft": {"type": ["string", "null"]},
+    "aksi_diajukan": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {"type": "object"}
+    }
+  },
+  "required": ["ringkasan", "draft", "aksi_diajukan"],
+  "additionalProperties": false
+}

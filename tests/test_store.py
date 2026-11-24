@@ -273,10 +273,27 @@ def test_status_summary(store):
     assert "usage_today" in s
 
 
-def test_tx_rolls_back_on_error(store):
+def test_count_waiting(store):
+    new_job(store, "1")
+    new_job(store, "2")
+    store.claim_next(["chat"])
+    assert store.count_waiting("chat") == 1
+    assert store.count_waiting("digest") == 0
+
+
+def test_transaction_rolls_back_on_error(store):
     j = new_job(store)
     with pytest.raises(RuntimeError):
-        with store._tx():
+        with store.transaction():
             store.conn.execute("UPDATE jobs SET status = 'gagal' WHERE id = ?", (j,))
             raise RuntimeError("mati di tengah")
     assert store.get_job(j).status is Status.BARU
+
+
+def test_release_returns_job_without_attempt(store):
+    j = new_job(store)
+    store.claim_next(["chat"])
+    job = store.release(j, result="auth")
+    assert job.status is Status.BARU and job.attempts == 0 and job.result == "auth"
+    with pytest.raises(InvalidTransition):
+        store.release(j, result="lagi")  # sudah baru

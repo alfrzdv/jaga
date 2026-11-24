@@ -167,7 +167,7 @@ class Store:
     def __init__(self, path: Path | str, clock: Callable[[], datetime] | None = None):
         """path ':memory:' untuk tes. clock harus return datetime aware."""
         self.clock = clock or (lambda: datetime.now(UTC))
-        # isolation_level=None: autocommit per statement; blok multi-statement lewat _tx()
+        # isolation_level=None: autocommit per statement; blok multi-statement lewat transaction()
         self.conn = sqlite3.connect(str(path), isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -179,7 +179,7 @@ class Store:
         self.conn.close()
 
     @contextmanager
-    def _tx(self) -> Iterator[None]:
+    def transaction(self) -> Iterator[None]:
         """BEGIN IMMEDIATE ... COMMIT; ROLLBACK kalau error."""
         self.conn.execute("BEGIN IMMEDIATE")
         try:
@@ -281,11 +281,22 @@ class Store:
             raise StaleVersion(f"job {job_id} berubah saat transisi")
         return self.get_job(job_id)
 
+    def release(self, job_id: int, result: str) -> Job:
+        """DIPROSES → BARU tanpa menghitung percobaan (masalahnya bukan di job, mis. auth)."""
+        cur = self.conn.execute(
+            "UPDATE jobs SET status = 'baru', attempts = MAX(attempts - 1, 0), result = ?,"
+            " updated_at = ? WHERE id = ? AND status = 'diproses'",
+            (result, self._now(), job_id),
+        )
+        if cur.rowcount == 0:
+            raise InvalidTransition(f"job {job_id} tidak sedang diproses")
+        return self.get_job(job_id)
+
     def recover_on_start(self, stale_minutes: int) -> dict[str, int]:
         """§4.4: DIPROSES lama → BARU; DISETUJUI/DIEKSEKUSI → PERLU_CEK (tidak pernah di-reset)."""
         now = self.clock()
         cutoff = _iso(now - timedelta(minutes=stale_minutes))
-        with self._tx():
+        with self.transaction():
             reset = self.conn.execute(
                 "UPDATE jobs SET status = 'baru', updated_at = ?"
                 " WHERE status = 'diproses' AND updated_at < ?",
@@ -326,6 +337,12 @@ class Store:
             (limit,),
         )
         return [_row_to_job(r) for r in rows]
+
+    def count_waiting(self, kind: str) -> int:
+        """Jumlah job BARU untuk satu kind (untuk notif batas harian)."""
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE kind = ? AND status = 'baru'", (kind,)
+        ).fetchone()[0]
 
     def has_open_digest(self) -> bool:
         row = self.conn.execute(
@@ -380,7 +397,7 @@ class Store:
     def should_send_alert(self, key: str, min_interval_s: int) -> bool:
         """True kalau belum pernah atau terakhir > min_interval_s lalu. count selalu naik."""
         now = self.clock()
-        with self._tx():
+        with self.transaction():
             row = self.conn.execute(
                 "SELECT last_sent_at FROM alerts WHERE key = ?", (key,)
             ).fetchone()
@@ -435,7 +452,7 @@ class Store:
         """§7: payload=NULL untuk job lebih tua dari `days`; hapus chat_messages lama.
         actions_log tidak disentuh."""
         cutoff = _iso(self.clock() - timedelta(days=days))
-        with self._tx():
+        with self.transaction():
             payload = self.conn.execute(
                 "UPDATE jobs SET payload = NULL WHERE created_at < ? AND payload IS NOT NULL",
                 (cutoff,),
